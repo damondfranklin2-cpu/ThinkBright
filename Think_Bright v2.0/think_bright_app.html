@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Think Bright — Seen • Guided • Open</title>
+<meta name="color-scheme" content="light dark" />
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#82aaff">
+<link rel="icon" href="favicon.ico" type="image/x-icon" />
+<style>
+:root{
+  --bg: #0f1216;
+  --card: #12161c;
+  --ink: #e6eaf2;
+  --muted:#9aa3b2;
+  --soft:#1a2029;
+  --accent:#82aaff;
+  --good:#30a46c;
+  --shadow: 0 10px 30px rgba(0,0,0,.45);
+  --radius: 16px;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{height:100%}
+body{
+  font: 16px/1.55 system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, sans-serif;
+  color:var(--ink);
+  background: var(--bg);
+  overflow-x:hidden;
+}
+#sky { position: fixed; inset: 0; z-index: -1; background: var(--bg); }
+.wrap{max-width:1100px; margin:0 auto; padding:24px; display:grid; gap:24px;}
+header{display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap;}
+.brand{display:flex; align-items:center; gap:12px;}
+.logo{width:42px; height:42px; border-radius:12px; background:linear-gradient(135deg, var(--accent), #8dd0ff);
+      box-shadow:var(--shadow); display:grid; place-items:center; color:white; font-weight:700; font-size:20px;}
+.title{display:flex; flex-direction:column}
+.title h1{font-size:18px;}
+.title small{color:var(--muted)}
+.actions{display:flex; gap:8px; margin-top:8px;}
+button, .chip{
+  border:0; border-radius:12px; padding:10px 14px; background:var(--soft); color:var(--ink);
+  cursor:pointer; font-weight:600;
+}
+.primary{background:var(--accent); color:white}
+.grid{display:grid; grid-template-columns: 1.1fr 1fr 1fr; gap:24px;}
+@media (max-width: 1200px){ .grid{grid-template-columns:1fr} }
+.card{
+  background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px;
+}
+textarea{
+  width:100%; min-height:180px; resize:vertical; border-radius:12px; border:1px solid var(--soft);
+  padding:14px; background:transparent; color:var(--ink); font: inherit;
+}
+.prompt{font-size:18px; font-weight:650; margin-bottom:10px;}
+.muted{color:var(--muted)}
+.pill{padding:6px 10px; border-radius:999px; background:var(--soft); color:var(--ink);}
+.note-actions{display:flex; gap:6px; margin-top:10px; flex-wrap:wrap;}
+#note-content{
+  transition: transform 0.6s cubic-bezier(0.4,0,0.2,1), box-shadow 0.6s;
+  transform-style: preserve-3d;
+  backface-visibility: hidden;
+  padding: 10px;
+  border-radius: 12px;
+  box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+  background: var(--soft);
+}
+</style>
+</head>
+<body>
+
+<canvas id="sky"></canvas>
+
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <div class="logo">💡</div>
+      <div class="title">
+        <h1>Think Bright</h1>
+        <small>seen • guided • open — supportive • private • motivating</small>
+      </div>
+    </div>
+    <div class="actions">
+      <button id="saveBtn" class="primary">Save Entry</button>
+      <button id="loadBtn">Unlock Insights & Notes</button>
+      <button id="newEntry" class="primary">New Entry</button>
+    </div>
+  </header>
+
+  <section class="grid">
+    <div class="card">
+      <p class="prompt" id="prompt">What has been on your mind lately?</p>
+      <textarea id="entry" placeholder="Let your thoughts land here…"></textarea>
+    </div>
+
+    <div class="card">
+      <h3>Insights</h3>
+      <div id="insights" class="muted">No entries yet.</div>
+    </div>
+
+    <div class="card">
+      <h3>Saved Notes</h3>
+      <div id="note-wrapper" style="perspective:600px;">
+        <div id="note-content" class="muted">No entries yet.</div>
+      </div>
+      <div class="note-actions">
+        <button id="prevNote">← Previous</button>
+        <button id="nextNote">Next →</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+// ====== Service Worker registration ======
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('sw.js').then(()=>console.log('Service Worker registered'));
+}
+
+// ====== Prompts ======
+const PROMPTS = [
+  "What has been on your mind lately?",
+  "What would make this week feel easier?",
+  "Where did you feel supported recently?",
+  "What do you want to leave behind from today?",
+  "If you gave yourself permission to rest, what would that look like?",
+  "Which small moment felt like relief?",
+  "What’s a boundary you’re proud of keeping?",
+  "What’s one gentle thing you can offer yourself tomorrow?",
+  "What feels heavy—and what feels light—right now?",
+  "What’s a tiny step toward feeling steadier?"
+];
+function dailyPrompt(){
+  const dayIndex = Math.floor(new Date().setHours(0,0,0,0) / 86400000);
+  return PROMPTS[dayIndex % PROMPTS.length];
+}
+document.getElementById('prompt').textContent = dailyPrompt();
+
+// ====== Encryption Helpers ======
+async function getKey(password) {
+  const enc = new TextEncoder();
+  const keyMaterial = await crypto.subtle.importKey(
+    "raw", enc.encode(password), {name: "PBKDF2"}, false, ["deriveKey"]);
+  return crypto.subtle.deriveKey(
+    {name: "PBKDF2", salt: enc.encode("think-bright-salt"), iterations: 100000, hash: "SHA-256"},
+    keyMaterial,
+    {name: "AES-GCM", length: 256},
+    false,
+    ["encrypt","decrypt"]
+  );
+}
+async function encryptText(text, password) {
+  const key = await getKey(password);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const enc = new TextEncoder();
+  const cipher = await crypto.subtle.encrypt({name: "AES-GCM", iv}, key, enc.encode(text));
+  return {iv: Array.from(iv), data: Array.from(new Uint8Array(cipher))};
+}
+async function decryptText(cipherObj, password) {
+  const key = await getKey(password);
+  const iv = new Uint8Array(cipherObj.iv);
+  const data = new Uint8Array(cipherObj.data);
+  const plain = await crypto.subtle.decrypt({name: "AES-GCM", iv}, key, data);
+  return new TextDecoder().decode(plain);
+}
+
+// ====== Elements ======
+const saveBtn = document.getElementById('saveBtn');
+const loadBtn = document.getElementById('loadBtn');
+const newEntryBtn = document.getElementById('newEntry');
+const entryEl = document.getElementById('entry');
+const insightsEl = document.getElementById('insights');
+const noteContentEl = document.getElementById('note-content');
+const prevBtn = document.getElementById('prevNote');
+const nextBtn = document.getElementById('nextNote');
+
+let notes = [];
+let currentIndex = 0;
+
+// ====== Save Entry ======
+saveBtn.onclick = async () => {
+  const text = entryEl.value.trim();
+  if (!text) return alert("Nothing to save.");
+  const pwd = prompt("Set or enter your password to encrypt:");
+  if (!pwd) return;
+  const cipher = await encryptText(text, pwd);
+  const entries = JSON.parse(localStorage.getItem('tb_entries') || "[]");
+  entries.push({date: new Date().toISOString(), cipher});
+  localStorage.setItem('tb_entries', JSON.stringify(entries));
+  entryEl.value = "";
+  updateInsightsPlaceholder();
+  alert("Saved securely.");
+};
+
+// ====== Stop Words for Insights ======
+const STOP_WORDS = new Set([
+  "the","and","a","an","to","of","in","on","for","with","that","is","it","this",
+  "i","you","my","me","we","our","but","or","as","at","by","from","be","are","was","were"
+]);
+
+// ====== Load Entries, Insights, Notes ======
+loadBtn.onclick = async () => {
+  const pwd = prompt("Enter your password to unlock insights and notes:");
+  if (!pwd) return;
+  const entries = JSON.parse(localStorage.getItem('tb_entries') || "[]");
+  if (!entries.length) return alert("No entries found.");
+
+  notes = [];
+  let allText = "";
+  for (let e of entries) {
+    try {
+      const t = await decryptText(e.cipher, pwd);
+      allText += " " + t;
+      notes.push(t);
+    } catch {
+      alert("Wrong password or corrupted entry.");
+      return;
+    }
+  }
+
+  // Insights
+  const words = allText.toLowerCase().match(/\b[a-zA-Z]{3,}\b/g) || [];
+  const freq = {};
+  words.forEach(w => { if (!STOP_WORDS.has(w)) freq[w] = (freq[w]||0)+1; });
+  const sorted = Object.entries(freq).sort((a,b)=>b[1]-a[1]);
+  const topWords = sorted.slice(0, 10).map(w=>w[0]);
+  insightsEl.textContent = topWords.length ? "Recurring themes: " + topWords.join(", ") : "No notable themes yet.";
+
+  // Auto-load last entry
+  entryEl.value = notes[notes.length-1];
+  currentIndex = notes.length-1;
+  displayNote();
+};
+
+function updateInsightsPlaceholder() {
+  const entries = JSON.parse(localStorage.getItem('tb_entries') || "[]");
+  if (!entries.length) insightsEl.textContent = "No entries yet.";
+  else insightsEl.textContent = `${entries.length} entries saved securely. Unlock to view themes.`;
+}
+updateInsightsPlaceholder();
+
+// ====== Notes Flip Animation ======
+function displayNote() {
+  if (!notes.length) {
+    noteContentEl.textContent = "No entries yet.";
+    return;
+  }
+  noteContentEl.textContent = notes[currentIndex];
+}
+
+function flipNote(forward = true) {
+  if (!notes.length) return;
+  noteContentEl.style.boxShadow = '0 15px 25px rgba(0,0,0,0.4)';
+  noteContentEl.style.transform = `rotateY(${forward ? -180 : 180}deg)`;
+  setTimeout(() => {
+    currentIndex = forward ? (currentIndex + 1) % notes.length
+                           : (currentIndex - 1 + notes.length) % notes.length;
+    noteContentEl.textContent = notes[currentIndex];
+    noteContentEl.style.transform = 'rotateY(0deg)';
+    noteContentEl.style.boxShadow = '0 5px 15px rgba(0,0,0,0.2)';
+  }, 300);
+}
+
+prevBtn.onclick = () => flipNote(false);
+nextBtn.onclick = () => flipNote(true);
+
+newEntryBtn.onclick = () => {
+  entryEl.value = "";
+  noteContentEl.textContent = "Starting a new entry...";
+  currentIndex = notes.length;
+};
+
+// ====== Animated Background ======
+const sky = document.getElementById('sky');
+const ctx = sky.getContext('2d');
+let W,H;
+function resizeCanvas(){ W=window.innerWidth; H=window.innerHeight; sky.width=W; sky.height=H; }
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+const particles=[];
+function spawnParticle(type){
+  const p={x:Math.random()*W, y:Math.random()*H, r:type==='star'?Math.random()*1.5+0.5:Math.random()*2+1,
+           vx:type==='comet'?(Math.random()-0.5)*4:0, vy:type==='comet'?(Math.random()-0.5)*4:0, alpha:1, type};
+  particles.push(p);
+}
+
+function drawParticles(){
+  ctx.clearRect(0,0,W,H);
+  particles.forEach((p,i)=>{
+    ctx.beginPath();
+    if(p.type==='star'){
+      ctx.fillStyle=`rgba(255,255,255,${0.5 + 0.5*Math.sin(Date.now()/500 + i)})`;
+      ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    }else{
+      const grad=ctx.createLinearGradient(p.x,p.y,p.x-p.vx*10,p.y-p.vy*10);
+      grad.addColorStop(0,`rgba(255,255,255,${p.alpha})`);
+      grad.addColorStop(1,'rgba(255,255,255,0)');
+      ctx.fillStyle=grad; ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill();
+    }
+    p.x+=p.vx; p.y+=p.vy; if(p.type==='comet') p.alpha-=0.005;
+    if(p.alpha<=0||p.x<-50||p.y<-50||p.x>W+50||p.y>H+50) particles.splice(i,1);
+  });
+}
+
+function animate(){ drawParticles(); requestAnimationFrame(animate); }
+animate();
+for(let i=0;i<50;i++) spawnParticle('star');
+
+let lastLength=0;
+entryEl.addEventListener('input',()=>{
+  const words=entryEl.value.trim().split(/\s+/);
+  if(words.length>lastLength){ if(Math.random()<0.8) spawnParticle('star'); else spawnParticle('comet'); }
+  lastLength=words.length;
+});
+</script>
+</body>
+</html>
